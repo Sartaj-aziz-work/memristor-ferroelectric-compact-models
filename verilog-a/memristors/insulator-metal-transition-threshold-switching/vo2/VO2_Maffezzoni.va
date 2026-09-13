@@ -1,0 +1,152 @@
+// ============================================================================
+//  VO2_Maffezzoni.va — Vanadium dioxide (VO2) relaxation-oscillator device
+//  Verilog-A compact model
+//
+//  Source paper : R. Debets, M. Galetta, T. Negrini, J. Verest, S. Lahkar,
+//                 D. F. Falcone, S. Karg, V. Bragaglia, A. Todri-Sanial,
+//                 "Investigation of Oscillatory Neural Networks with
+//                  Verilog-A Models of VO2 Relaxation Oscillators and Analog
+//                  RRAM Coupling Elements", IEEE JETCAS 16(2), June 2026.
+//                 DOI 10.1109/JETCAS.2026.3705420
+//  Underlying    : P. Maffezzoni, L. Daniel, N. Shukla, S. Datta,
+//  formulation     A. Raychowdhury, IEEE TCAS-I 62(9), 2207 (2015).
+//
+//  Toolchain : OpenVAF  ->  VO2_Maffezzoni.osdi  ->  ngspice (pre_osdi)
+//
+//  ---------------------------------------------------------------------------
+//  WHAT THIS MODEL SAYS, IN ONE PARAGRAPH
+//  ---------------------------------------------------------------------------
+//  VO2 is treated as an IDEAL RESISTOR THAT FLIPS BETWEEN TWO VALUES.
+//  In the insulating state its resistance is Rins; in the metallic state it is
+//  Rmet (much smaller). It flips insulator->metal (IMT) when the voltage
+//  across it rises above VIMT, and flips back metal->insulator (MIT) when the
+//  voltage falls below VMIT. Because VMIT < VIMT, the two thresholds differ
+//  and the device is HYSTERETIC.
+//
+//  That is the whole model. It is deliberately NOT physics-based: there is no
+//  temperature, no Joule heating, no phase-transition physics. The paper is
+//  explicit that VO2 switching is really current- and thermally driven, and
+//  that this abstraction cannot capture cycle-to-cycle drift — it is fitted to
+//  the device in its WARMED-UP state and used because it is fast, robust and
+//  good enough for circuit-level network simulation.
+//
+//  ---------------------------------------------------------------------------
+//  WHY THE STATE VARIABLE IS SMOOTHED
+//  ---------------------------------------------------------------------------
+//  A literal comparator (if V > Vth then metallic) is a step discontinuity.
+//  Circuit solvers need derivatives; a step has none, so it causes convergence
+//  failures and simulator-dependent results. The paper's whole point about
+//  model robustness is avoiding exactly this. So the state is a CONTINUOUS
+//  variable driven by a smooth (tanh) target through a first-order lag:
+//
+//        tau * d(state)/dt  =  target(V) - state
+//
+//  Set tau much smaller than the RC time constant of the external circuit and
+//  the behaviour is indistinguishable from an ideal switch — the paper's Fig. 2b
+//  makes exactly this simplification (transition delay negligible).
+// ============================================================================
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module VO2_Maffezzoni(p, n);
+
+    // ------------------------------------------------------------------------
+    // TERMINALS
+    // ------------------------------------------------------------------------
+    inout p, n;
+    electrical p, n;            // the two device electrodes
+
+    // ------------------------------------------------------------------------
+    // INTERNAL NODE — the device state
+    // ------------------------------------------------------------------------
+    electrical st;              // STATE node. Its "voltage" is not a voltage:
+                                //   V(st) = 1  ->  fully INSULATING
+                                //   V(st) = 0  ->  fully METALLIC
+                                // This matches Vstate in the paper (Fig. 2),
+                                // which is defined on exactly that 0..1 range.
+                                // Probe it in ngspice as  v(n1#st).
+
+    // ------------------------------------------------------------------------
+    // PARAMETERS — Table I of the paper
+    // ------------------------------------------------------------------------
+    //                                       STATIC fit    DYNAMIC fit
+    //   VMIT  metal->insulator threshold      0.5  V        0.4  V
+    //   VIMT  insulator->metal threshold      1.65 V        1.2  V
+    //   Rmet  metallic resistance             0.8  kOhm     2.8  kOhm
+    //   Rins  insulating resistance           50   kOhm     13.5 kOhm
+    //
+    // Defaults below are the DYNAMIC fit, because the paper concludes that is
+    // the one to use for oscillator work (the static fit predicts oscillations
+    // faster and larger than the real device, Fig. 5).
+    parameter real VMIT = 0.4    from (0:inf);   // [V]
+    parameter real VIMT = 1.2    from (0:inf);   // [V]  must be > VMIT
+    parameter real Rmet = 2.8e3  from (0:inf);   // [ohm]
+    parameter real Rins = 13.5e3 from (0:inf);   // [ohm] must be > Rmet
+
+    //  --- numerical / dynamic parameters ---
+    parameter real tau  = 10e-9  from (0:inf);   // intrinsic transition time [s].
+                                                 // Keep tau << Rext*Cext so it
+                                                 // does not affect the period.
+    parameter real vsm  = 10e-3  from (0:inf);   // threshold smoothing width [V].
+                                                 // Smaller = sharper switch but
+                                                 // harder to converge.
+
+    // ------------------------------------------------------------------------
+    // LOCAL VARIABLES
+    // ------------------------------------------------------------------------
+    real Vvo2, Vth, target, Gdev;
+
+    analog begin
+
+        // ====================================================================
+        // STEP 1 — voltage across the device
+        // ====================================================================
+        Vvo2 = V(p, n);
+
+        // ====================================================================
+        // STEP 2 — which threshold applies RIGHT NOW?
+        // ====================================================================
+        // This single line is where the hysteresis comes from.
+        //   state = 1 (insulating) -> Vth = VIMT  (need a HIGH voltage to turn on)
+        //   state = 0 (metallic)   -> Vth = VMIT  (need a LOW voltage to turn off)
+        // The device therefore "remembers" which state it is in by using a
+        // different switching threshold in each one.
+        Vth = VMIT + (VIMT - VMIT) * V(st);
+
+        // ====================================================================
+        // STEP 3 — where the state WANTS to go
+        // ====================================================================
+        //   Vvo2 well ABOVE Vth  -> target -> 0  (become metallic)
+        //   Vvo2 well BELOW Vth  -> target -> 1  (become insulating)
+        // tanh gives a smooth S-shaped transition of width ~vsm instead of a
+        // discontinuous step.
+        target = 0.5 * (1.0 - tanh( (Vvo2 - Vth) / vsm ));
+
+        // ====================================================================
+        // STEP 4 — state dynamics:  tau*d(state)/dt = target - state
+        // ====================================================================
+        // Written in sum-to-zero form as two contributions to the state node:
+        //     tau*d(state)/dt  +  state  -  target  =  0
+        // ddt() is Verilog-A's built-in time derivative.
+        I(st) <+ tau * ddt(V(st));
+        I(st) <+ V(st) - target;
+
+        // At DC (ddt = 0) this gives state = target, so the operating point is
+        // self-consistent and the model starts up without any initial condition.
+
+        // ====================================================================
+        // STEP 5 — conduction
+        // ====================================================================
+        // Interpolate CONDUCTANCE (not resistance) between the two states:
+        //     state = 0 -> G = 1/Rmet    (metallic, low resistance)
+        //     state = 1 -> G = 1/Rins    (insulating, high resistance)
+        // Interpolating conductance keeps the numbers well-scaled; interpolating
+        // resistance directly would swing across orders of magnitude.
+        Gdev = (1.0 - V(st))/Rmet + V(st)/Rins;
+
+        I(p, n) <+ Vvo2 * Gdev;
+
+    end
+
+endmodule

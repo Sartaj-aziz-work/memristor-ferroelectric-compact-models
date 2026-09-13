@@ -1,0 +1,67 @@
+* ===========================================================================
+* TEST 1 — Static I-V sweep  (reproduces paper Fig. 3b top and Fig. 4)
+*
+* Run:  ngspice.exe test1_static_iv.cir       (needs VO2_Maffezzoni.osdi here)
+*
+* WHAT THE PAPER DID
+*   The VO2 device is put in series with an external resistor (100 ohm in one
+*   measurement, 1 kohm in the other). VDD is swept 0 -> 2 V -> 0 over a time
+*   MUCH longer than any circuit time constant, so nothing dynamic happens.
+*   That is what "static" means here. No capacitor is present.
+*
+* WHY TWO RESISTOR VALUES
+*   Rext sets the load line. A small Rext (100 ohm) barely loads the device, so
+*   almost all of VDD appears across the VO2. A larger Rext (1 kohm) takes a
+*   bigger share once the device is metallic and current is high. Comparing the
+*   two shows the switching thresholds belong to the DEVICE, not the circuit.
+*
+* This netlist runs BOTH at once as two independent branches, so one run gives
+* you both curves.
+*
+* PARAMETERS: the STATIC fit from Table I (this is the static experiment).
+*
+* EXPECTED RESULT (pre-computed by solving the model):
+*   Sweeping UP:   current sits near 0.04 mA, then JUMPS to ~1.8 mA when the
+*                  device voltage reaches ~1.62 V (VIMT = 1.65 V).
+*                  Peak ~2.2 mA at Vvo2 ~ 1.78 V.
+*   Sweeping DOWN: device stays metallic well below the turn-on point and only
+*                  releases at Vvo2 ~ 0.53 V (VMIT = 0.5 V).
+*   The loop between 0.53 V and 1.62 V is the hysteresis — compare Fig. 4.
+* ===========================================================================
+
+* STATIC fit, Table I
+.model vo2s VO2_Maffezzoni VMIT=0.5 VIMT=1.65 Rmet=0.8k Rins=50k
+
+* ---- branch A: Rext = 100 ohm ----
+VddA ddA 0 PWL(0 0  50m 2  100m 0)
+N1   ddA outA vo2s
+RextA outA 0 100
+
+* ---- branch B: Rext = 1 kohm ----
+VddB ddB 0 PWL(0 0  50m 2  100m 0)
+N2   ddB outB vo2s
+RextB outB 0 1k
+
+.tran 10u 100m
+
+.control
+pre_osdi VO2_Maffezzoni.osdi
+run
+
+* device voltage and device current for each branch
+let vvo2_A = v(ddA) - v(outA)
+let idev_A = v(outA)/100
+let vvo2_B = v(ddB) - v(outB)
+let idev_B = v(outB)/1000
+
+* THE MAIN PLOT: the I-V hysteresis loop (paper Fig. 4)
+plot idev_A vs vvo2_A
+
+* same device, heavier load — thresholds unchanged, current levels differ
+plot idev_B vs vvo2_B
+
+* the internal state flipping between 1 (insulating) and 0 (metallic)
+plot v(n1#st)
+
+.endc
+.end

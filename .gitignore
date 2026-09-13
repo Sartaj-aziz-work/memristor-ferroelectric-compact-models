@@ -1,0 +1,12 @@
+# compiled Verilog-A build artifacts
+*.osdi
+
+# simulator output
+*.raw
+*.log
+*.net
+*.op.raw
+
+# OS clutter
+Thumbs.db
+.DS_Store

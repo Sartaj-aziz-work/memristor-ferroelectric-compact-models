@@ -1,0 +1,76 @@
+* ===========================================================================
+* TEST 2 — Relaxation oscillator  (reproduces paper Fig. 3b bottom / Fig. 5)
+*
+* Run:  ngspice.exe test2_oscillator.cir      (needs VO2_Maffezzoni.osdi here)
+*
+* THE CIRCUIT (paper Fig. 3a)
+*      VDD ---[ VO2 ]--- out ---+--- Rext --- GND
+*                               |
+*                               +--- Cext --- GND
+*
+* HOW IT OSCILLATES — the loop, step by step:
+*   1. Device METALLIC (low R = Rmet). Cext charges FAST, so v(out) RISES
+*      toward Emet = VDD*Rext/(Rext+Rmet). As v(out) rises, the voltage across
+*      the device, Vvo2 = VDD - v(out), FALLS.
+*   2. When Vvo2 falls to VMIT the device snaps INSULATING.
+*      That happens at v(out) = Vhi = VDD - VMIT.
+*   3. Device INSULATING (high R = Rins). Cext now discharges through Rext, so
+*      v(out) FALLS toward Eins = VDD*Rext/(Rext+Rins), and Vvo2 RISES.
+*   4. When Vvo2 rises to VIMT the device snaps back METALLIC.
+*      That happens at v(out) = Vlo = VDD - VIMT.
+*   5. Repeat forever. That is a relaxation oscillator.
+*
+*   For the loop to close, the capacitor must actually be ABLE to reach each
+*   switching point before it settles:
+*      Emet > Vhi   (can charge high enough to trigger the MIT)
+*      Eins < Vlo   (can discharge low enough to trigger the IMT)
+*   which is the paper's condition that Vlo and Vhi both lie between Eins and
+*   Emet (eq. 1-4). If either fails, the device latches instead of oscillating.
+*
+* BIAS POINT (paper's own: VDD = 5 V, Rext = 40 kohm, Cext = 1 nF, dynamic fit)
+*   Eins = 5*40/(40+13.5) = 3.738 V      Vlo = 5 - 1.2 = 3.80 V
+*   Emet = 5*40/(40+2.8)  = 4.673 V      Vhi = 5 - 0.4 = 4.60 V
+*   3.738 < 3.80 and 4.60 < 4.673  ->  oscillates. Good.
+*
+* WHY VDD IS RAMPED INSTEAD OF APPLIED AS A STEP
+*   A hard step can drop the solver onto an equilibrium point and the circuit
+*   never starts swinging. Ramping over 20 us guarantees a clean start. The
+*   paper deals with the same startup issue in Sec. VI / Fig. 12.
+*
+* EXPECTED RESULT (verified numerically before shipping this file):
+*   v(out) oscillates between 3.83 V and 4.57 V  (theory: 3.80 / 4.60)
+*   period ~27.9 us  ->  frequency ~35.8 kHz, in the 30-40 kHz band of Fig. 9.
+* ===========================================================================
+
+* DYNAMIC fit, Table I — the paper's recommended set for oscillator work
+.model vo2d VO2_Maffezzoni VMIT=0.4 VIMT=1.2 Rmet=2.8k Rins=13.5k
+
+Vdd  dd 0 PWL(0 0  20u 5  1 5)
+N1   dd out vo2d
+Rext out 0 40k
+Cext out 0 1n
+
+.tran 10n 300u
+
+.control
+pre_osdi VO2_Maffezzoni.osdi
+run
+
+* THE MAIN PLOT: sustained relaxation oscillations at the output node
+plot v(out)
+
+* the voltage across the VO2 itself — this is what crosses VIMT and VMIT
+let vvo2 = v(dd) - v(out)
+plot vvo2
+
+* the state variable: a square wave flipping 1 <-> 0 (insulating <-> metallic)
+plot v(n1#st)
+
+* measure the period and print the frequency
+meas tran ta WHEN v(out)=4.2 CROSS=5
+meas tran tb WHEN v(out)=4.2 CROSS=9
+let freq_kHz = 2/(tb-ta)/1e3
+print freq_kHz
+
+.endc
+.end
