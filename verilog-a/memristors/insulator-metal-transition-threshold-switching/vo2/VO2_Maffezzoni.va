@@ -14,7 +14,6 @@
 //  Toolchain : OpenVAF  ->  VO2_Maffezzoni.osdi  ->  ngspice (pre_osdi)
 //
 //  ---------------------------------------------------------------------------
-//  WHAT THIS MODEL SAYS, IN ONE PARAGRAPH
 //  ---------------------------------------------------------------------------
 //  VO2 is treated as an IDEAL RESISTOR THAT FLIPS BETWEEN TWO VALUES.
 //  In the insulating state its resistance is Rins; in the metallic state it is
@@ -29,22 +28,7 @@
 //  that this abstraction cannot capture cycle-to-cycle drift — it is fitted to
 //  the device in its WARMED-UP state and used because it is fast, robust and
 //  good enough for circuit-level network simulation.
-//
-//  ---------------------------------------------------------------------------
-//  WHY THE STATE VARIABLE IS SMOOTHED
-//  ---------------------------------------------------------------------------
-//  A literal comparator (if V > Vth then metallic) is a step discontinuity.
-//  Circuit solvers need derivatives; a step has none, so it causes convergence
-//  failures and simulator-dependent results. The paper's whole point about
-//  model robustness is avoiding exactly this. So the state is a CONTINUOUS
-//  variable driven by a smooth (tanh) target through a first-order lag:
-//
-//        tau * d(state)/dt  =  target(V) - state
-//
-//  Set tau much smaller than the RC time constant of the external circuit and
-//  the behaviour is indistinguishable from an ideal switch — the paper's Fig. 2b
-//  makes exactly this simplification (transition delay negligible).
-// ============================================================================
+
 
 `include "constants.vams"
 `include "disciplines.vams"
